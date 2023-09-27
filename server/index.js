@@ -1,74 +1,86 @@
 const express = require('express');
-const mysql = require('mysql');
-const cors = require("cors");
+const mysql = require('mysql2/promise'); // Use mysql2 with async/await
+const bcrypt = require('bcrypt');
+const cors = require('cors');
+const dotenv = require('dotenv');
 
-const port = 3001; // You can use any port you prefer
+dotenv.config(); // Load environment variables from a .env file
 
+const port = process.env.PORT || 3001;
 const app = express();
 
 app.use(express.json());
 app.use(cors());
 
-const db = mysql.createConnection({
-  host: 'localhost',
-  user: 'root',
-  password: 'password',
-  database: 'bop',
+// Create a MySQL connection pool
+const pool = mysql.createPool({
+  host: process.env.DB_HOST || 'localhost',
+  user: process.env.DB_USER || 'root',
+  password: process.env.DB_PASSWORD || 'password',
+  database: process.env.DB_NAME || 'bop',
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0,
 });
 
-db.connect((err) => {
-  if (err) {
-    console.error('Database connection error: ' + err.message);
-  } else {
-    console.log('Connected to MySQL database');
-  }
-});
+// Use bcrypt to hash passwords
+const saltRounds = 10;
 
 app.get('/', (req, res) => {
   res.send('Hello world!');
 });
 
-app.post('/register', (req, res) => {
+app.post('/register', async (req, res) => {
+  try {
+    const { username, email, password } = req.body;
 
-  const username = req.body.username
-  const email = req.body.email
-  const password = req.body.password
+    // Hash the password
+    const hashedPassword = await bcrypt.hash(password, saltRounds);
 
-  console.log(username,email,password);
+    // Insert the user into the database
+    const [result] = await pool.execute(
+      'INSERT INTO users (username, email, password) VALUES (?, ?, ?)',
+      [username, email, hashedPassword]
+    );
 
-  db.query("INSERT INTO users (username, email, password) VALUES (?,?,?)",
-  [username,email,password],
-  (err,result) => {
-    console.log(err);
-  })
+    res.status(201).json({ message: 'Registration successful' });
+  } catch (error) {
+    console.error('Error during registration:', error);
+    res.status(500).json({ message: 'Registration failed' });
+  }
+});
 
-  console.log("registration attempt received");
-})
+app.post('/login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
 
-app.post('/login', (req,res) => {
-  const username = req.body.username;
-  const password = req.body.password;
+    // Fetch the user from the database
+    const [rows] = await pool.execute(
+      'SELECT * FROM users WHERE username = ?',
+      [username]
+    );
 
-  console.log(username, password);
-  console.log("login attempt received");
-
-  db.query(
-    "SELECT * FROM users WHERE username = ? AND password = ?",
-    [username, password],
-    (err, result) => {
-      if (err){
-        res.send({err: err})
-      }
-
-      if (result.length > 0) {
-        res.send(result)
-      } else {
-        res.send({message: "Incorrect username/password combination!"})
-      }
+    if (rows.length === 0) {
+      return res.status(401).json({ message: 'Incorrect username/password combination' });
     }
-  )
-  
-})
+
+    const user = rows[0];
+
+    // Compare the hashed password
+    const passwordMatch = await bcrypt.compare(password, user.password);
+
+    if (!passwordMatch) {
+      return res.status(401).json({ message: 'Incorrect username/password combination' });
+    }
+
+    // You can generate a JWT token here for authenticated users if needed
+
+    res.json({ message: 'Login successful' });
+  } catch (error) {
+    console.error('Error during login:', error);
+    res.status(500).json({ message: 'Login failed' });
+  }
+});
 
 app.listen(port, () => {
   console.log(`Server is running on port ${port}`);
